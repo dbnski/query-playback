@@ -25,6 +25,7 @@ class MySQLDBThread : public DBThread
  private:
   MYSQL handle;
   MySQLOptions *options;
+  std::string current_schema;
   int num_connect_errors;
   bool have_connected;
 
@@ -39,6 +40,7 @@ class MySQLDBThread : public DBThread
 
   bool connect();
   void disconnect();
+  bool select_db(const std::string &schema);
   void execute_query(const std::string &query, QueryResult *r,
 		     const QueryResult &expected_result);
   void run();

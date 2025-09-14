@@ -26,8 +26,9 @@ class NULLDBThread : public DBThread
 
   bool connect() { return true; };
   void disconnect() {};
+  bool select_db(const std::string &) { return true; };
   void execute_query(const std::string &, QueryResult *r,
-		     const QueryResult &expected_result) {
+         const QueryResult &expected_result) {
     *r= expected_result;
   };
 };

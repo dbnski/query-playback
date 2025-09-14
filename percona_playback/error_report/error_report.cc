@@ -46,6 +46,7 @@ public:
   }
 
   virtual void query_execution(const uint64_t thread_id,
+             const std::string &schema,
 			       const std::string &query,
 			       const QueryResult &expected,
 			       const QueryResult &actual)

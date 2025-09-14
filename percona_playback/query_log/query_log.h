@@ -63,9 +63,11 @@ public:
   bool is_quit() const;
 
   uint64_t parseThreadId() const;
+  uint64_t parseErrno() const;
   uint64_t parseRowsSent() const;
   uint64_t parseRowsExamined() const;
   double parseQueryTime() const;
+  boost::string_ref parseSchema() const;
 
   TimePoint getStartTime() const { return start_time; }
   void setStartTime(TimePoint tp) { start_time = tp; }

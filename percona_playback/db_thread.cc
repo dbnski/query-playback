@@ -24,6 +24,7 @@
 #include <boost/bind.hpp>
 
 extern std::string g_session_init_query;
+extern bool g_session_reuse;
 
 void DBThread::init_session()
 {
@@ -48,8 +49,11 @@ void DBThread::run()
 
     if (query->is_quit())
     {
-      disconnect();
-      connect_and_init_session();
+      if (!g_session_reuse)
+      {
+        disconnect();
+        connect_and_init_session();
+      }
       continue;
     }
 

@@ -99,6 +99,49 @@ void MySQLDBThread::disconnect()
     mysql_close(&handle);
   }
   have_connected = false;
+  current_schema = "";
+}
+
+bool MySQLDBThread::select_db(const std::string &schema) {
+  if ( !have_connected ) {
+    connect_and_init_session();
+  }
+  if (current_schema == schema) {
+    return true;
+  }
+
+  int mr;
+  for(unsigned i = 0; i < options->max_retries + 1; ++i)
+  {
+    mr= mysql_select_db(&handle, schema.c_str());
+    if(mr != 0)
+    {
+      /* schema does not exist - fail fast */
+      if (mysql_errno(&handle) == 1049) {
+        fprintf(stderr,
+                "Error changing database: %s\n",
+                mysql_error(&handle));
+        break;
+      }
+      if (should_print_error(mysql_error(&handle))) {
+        fprintf(stderr,
+                "Error changing database: %s, number of tries %u of %u\n",
+                mysql_error(&handle),
+                i + 1,
+                options->max_retries + 1);
+      }
+      if (mysql_errno(&handle) == 1203) {
+        usleep(1000000 * i);
+      }
+      disconnect();
+      connect_and_init_session();
+    }
+    else {
+      current_schema = schema;
+      return true;
+    }
+  }
+  return false;
 }
 
 void MySQLDBThread::execute_query(const std::string &query, QueryResult *r,

@@ -113,13 +113,15 @@ public:
 
 
   virtual void query_execution(const uint64_t thread_id,
+             const std::string &schema,
 			       const std::string &query,
 			       const QueryResult &expected,
 			       const QueryResult &actual)
   {
     if (actual.getError())
     {
-      fprintf(stderr,_("Error query: %s\n"), query.c_str());
+      if (!expected.getError())
+        fprintf(stderr,_("Error query (db: %s): %s\n"), schema.c_str(), query.c_str());
       nr_error_queries++;
     }
 
@@ -140,7 +142,7 @@ public:
     if (!ignore_row_result_diffs && actual.getRowsSent() != expected.getRowsSent())
     {
       nr_queries_rows_differ++;
-      fprintf(stderr, _("Connection %"PRIu64" Rows Sent: %"PRIu64 " != expected %"PRIu64 " for query: %s\n"), thread_id, actual.getRowsSent(), expected.getRowsSent(), query.c_str());
+      fprintf(stderr, _("Connection %" PRIu64" Rows Sent: %" PRIu64 " != expected %" PRIu64 " for query (db: %s): %s\n"), thread_id, actual.getRowsSent(), expected.getRowsSent(), schema.c_str(), query.c_str());
     }
 
     nr_queries_executed++;
@@ -170,7 +172,7 @@ public:
            boost::posix_time::to_simple_string(total_duration).c_str(),
            boost::posix_time::to_simple_string(expected_duration).c_str()
            );
-    printf(_("%"PRIu64 " queries were quicker than expected, %"PRIu64" were slower\n"),
+    printf(_("%" PRIu64 " queries were quicker than expected, %" PRIu64 " were slower\n"),
            uint64_t(nr_quicker_queries),
            uint64_t(nr_slower_queries));
 
@@ -202,7 +204,7 @@ public:
     double avg_queries= (double)total_queries / (double)connection_query_counts.size();
 
     printf("\n");
-    printf(_("Average of %.2f queries per connection (%"PRIu64 " connections).\n"),
+    printf(_("Average of %.2f queries per connection (%" PRIu64 " connections).\n"),
 	   avg_queries, uint64_t(connection_query_counts.size()));
     printf("\n");
 
@@ -213,7 +215,7 @@ public:
       BOOST_FOREACH(const SortedConnectionQueryCountPair &conn_count,
 		    sorted_conn_count)
       {
-	printf("%"PRIu64 "\t\t%"PRIu64 "\n",
+	printf("%" PRIu64 "\t\t%" PRIu64 "\n",
 	       conn_count.first,
 	       conn_count.second);
       }

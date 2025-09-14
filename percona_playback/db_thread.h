@@ -78,6 +78,7 @@ public:
   virtual bool connect()= 0;
 
   virtual void disconnect()= 0;
+  virtual bool select_db(const std::string &schema)= 0;
   virtual void execute_query(const std::string &query,
 			     QueryResult *r,
 			     const QueryResult &expected_result)= 0;

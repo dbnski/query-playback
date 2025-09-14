@@ -58,6 +58,8 @@ static bool g_run_set_timestamp;
 static bool g_preserve_query_time;
 static bool g_accurate_mode;
 static bool g_disable_sorting;
+static bool g_read_only_mode;
+static bool g_skip_trivial_reads;
 
 static boost::atomic<long long> g_max_behind_ns;
 
@@ -101,7 +103,7 @@ static bool parse_time(boost::string_ref s, QueryLogData::TimePoint& start_time)
   std::tm td;
   memset(&td, 0, sizeof(td));
   std::string line(s.begin(), s.end());
-  int num_read = sscanf(line.c_str(), "# Time: %02d%02d%02d %2d:%02d:%02d.%06lld",
+  int num_read = sscanf(line.c_str(), "# Time: %04d-%02d-%02dT%02d:%02d:%02d.%06lldZ",
                         &td.tm_year, &td.tm_mon, &td.tm_mday, &td.tm_hour, &td.tm_min, &td.tm_sec, &msecs);
   if (num_read < 6)
     return false;
@@ -114,6 +116,18 @@ static bool parse_time(boost::string_ref s, QueryLogData::TimePoint& start_time)
   start_time += boost::chrono::microseconds(msecs);
 
   return true;
+}
+
+bool starts_with_ci(const std::string& str, const std::string& prefix) {
+    if (str.size() < prefix.size()) return false;
+
+    return std::equal(
+        prefix.begin(), prefix.end(),
+        str.begin(),
+        [](char a, char b) {
+            return std::tolower(a) == std::tolower(b);
+        }
+    );
 }
 
 boost::shared_ptr<QueryLogEntries> getEntries(boost::string_ref data)  {
@@ -222,10 +236,36 @@ void QueryLogData::execute(DBThread *t)
 {
   std::string query = getQuery(!g_run_set_timestamp);
 
+  if (g_read_only_mode && !starts_with_ci(query, "SELECT"))
+  {
+    return;
+  }
+  if (g_skip_trivial_reads && starts_with_ci(query, "SELECT @@"))
+  {
+    return;
+  }
+
+  boost::string_ref schema = parseSchema();
+  if (!schema.empty()) {
+    if (!t->select_db(std::string(schema))) {
+      QueryResult e, r;
+      e.setError(parseErrno());
+      r.setError(1049); // MY-001049 (ER_BAD_DB_ERROR)
+      uint64_t thread_id = parseThreadId();
+      BOOST_FOREACH(const percona_playback::PluginRegistry::ReportPluginPair pp,
+                    percona_playback::PluginRegistry::singleton().report_plugins)
+      {
+        if (pp.second->active)
+          pp.second->query_execution(thread_id, std::string(schema), query, e, r);
+      }
+      return;
+    }
+  }
+
   QueryResult expected_result;
   expected_result.setRowsSent(parseRowsSent());
   expected_result.setRowsExamined(parseRowsExamined());
-  expected_result.setError(0);
+  expected_result.setError(parseErrno());
 
   boost::posix_time::time_duration expected_duration=
     boost::posix_time::microseconds(long(parseQueryTime() * 1000000));
@@ -277,6 +317,7 @@ void QueryLogData::execute(DBThread *t)
   {
     if (pp.second->active)
       pp.second->query_execution(thread_id,
+                                 std::string(schema),
                                  query,
                                  expected_result,
                                  r);
@@ -298,6 +339,9 @@ std::string QueryLogData::getQuery(bool remove_timestamp) {
     found_non_comment_line = true;
     if (remove_timestamp && line.starts_with("SET timestamp="))
       continue;
+    if (line.starts_with("use ")) {
+      continue;
+    }
     boost::string_ref trimmed_line = trim(line);
     if (trimmed_line.empty())
       continue;
@@ -313,18 +357,26 @@ uint64_t QueryLogData::parseThreadId() const {
   if (thread_id)
     return thread_id;
 
-  size_t location= find(data, "Thread_id: ");
+  // starting from MySQL 5.6.2 (bug #53630) the thread id is included as "Id:"
+  size_t location= find(data, "Id: ");
+  if (location != std::string::npos) {
+     thread_id = strtoull(&data[location + strlen("Id: ")], NULL, 10);
+     return thread_id;
+  }
+
+  location= find(data, "Thread_id: ");
   if (location != std::string::npos) {
     thread_id = strtoull(&data[location + strlen("Thread_Id: ")], NULL, 10);
     return thread_id;
   }
 
-  // starting from MySQL 5.6.2 (bug #53630) the thread id is included as "Id:"
-  location= find(data, "Id: ");
-  if (location != std::string::npos) {
-     thread_id = strtoull(&data[location + strlen("Id: ")], NULL, 10);
-     return thread_id;
-  }
+  return 0;
+}
+
+uint64_t QueryLogData::parseErrno() const {
+  size_t location= find(data, "Errno: ");
+  if (location != std::string::npos)
+    return strtoull(&data[location + strlen("Errno: ")], NULL, 10);
   return 0;
 }
 
@@ -347,6 +399,19 @@ double QueryLogData::parseQueryTime() const {
   if (location != std::string::npos)
     return strtod(&data[location + strlen("Query_time: ")], NULL);
   return 0.0;
+}
+
+boost::string_ref QueryLogData::parseSchema() const {
+  size_t location= find(data, "Schema: ");
+  if (location == boost::string_ref::npos) {
+    return boost::string_ref("", 0);
+  }
+  size_t start = location + strlen("Schema: ");
+  boost::string_ref remainder = data.substr(start);
+  size_t end = find(remainder, " ");
+  if (end == boost::string_ref::npos)
+    end = data.size();
+  return data.substr(start, end);
 }
 
 extern percona_playback::DBClientPlugin *g_dbclient_plugin;
@@ -425,6 +490,16 @@ public:
        _("Disables the sorting of queries based on time (and InnoDB TRX ID). "
          "Instead replays queries in the order they appear in the log. "
          "Ignored in accurate mode which always does the sorting."))
+      ("query-log-read-only-mode",
+       po::value<bool>(&g_read_only_mode)->
+        default_value(false)->
+          zero_tokens(),
+       _("Skip queries other than SELECT."))
+      ("query-log-skip-trivial-reads",
+       po::value<bool>(&g_skip_trivial_reads)->
+        default_value(false)->
+          zero_tokens(),
+       _("Skip SELECT @@var queries."))
       ;
 
     return &options;
@@ -523,6 +598,7 @@ class QueryLogReportPlugin : public percona_playback::ReportPlugin {
 public:
   QueryLogReportPlugin(std::string _name) : percona_playback::ReportPlugin(_name) {}
   virtual void query_execution(const uint64_t thread_id,
+                               const std::string &schema,
                                const std::string &query,
                                const QueryResult &expected,
                                const QueryResult &actual) {}

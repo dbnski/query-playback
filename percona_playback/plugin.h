@@ -92,7 +92,8 @@ class ReportPlugin : public plugin
   ReportPlugin(std::string _name) : name(_name) {}
 
   virtual void query_execution(const uint64_t thread_id,
-			       const std::string &query,
+             const std::string &schema,
+             const std::string &query,
 			       const QueryResult &expected,
 			       const QueryResult &actual)=0;
 

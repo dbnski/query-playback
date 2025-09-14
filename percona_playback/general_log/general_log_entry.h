@@ -25,10 +25,11 @@ class GeneralLogEntry : public QueryEntry
       double query_time;
       std::vector<std::string> info;
       std::string set_timestamp_query;
+      std::string schema;
       std::string query;
     public:
 
-      GeneralLogEntry() : thread_id(0), rows_sent(0), rows_examined(0), query_time(0) {}
+      GeneralLogEntry() : thread_id(0), rows_sent(0), rows_examined(0), query_time(0), schema("") {}
 
       virtual uint64_t getThreadId() const { return thread_id; }
 

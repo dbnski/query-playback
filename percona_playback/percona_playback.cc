@@ -44,6 +44,7 @@ percona_playback::InputPlugin *g_input_plugin= NULL;
 percona_playback::DispatcherPlugin *g_dispatcher_plugin= NULL;
 unsigned int g_db_thread_queue_depth;
 std::string g_session_init_query;
+bool g_session_reuse;
 
 using namespace percona_playback;
 
@@ -199,6 +200,9 @@ int percona_playback_argv(percona_playback_st *the_percona_playback,
     ("session-init-query",
      po::value<std::string>(&g_session_init_query)->default_value(""),
      _("This query will be executed just after each connect to db"))
+    ("session-reuse",
+     po::value<bool>(&g_session_reuse)->default_value(false)->zero_tokens(),
+     _("Do not reconnect between sesssions"))
     ;
 
   std::string basic_usage;

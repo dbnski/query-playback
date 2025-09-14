@@ -22,6 +22,8 @@
 
 void GeneralLogEntry::execute(DBThread *t)
 {
+  t->select_db(schema);
+
   std::vector<std::string>::iterator it;
   QueryResult r;
 
@@ -47,25 +49,40 @@ void GeneralLogEntry::execute(DBThread *t)
   BOOST_FOREACH(const percona_playback::PluginRegistry::ReportPluginPair pp, percona_playback::PluginRegistry::singleton().report_plugins)
   {
     if (pp.second->active)
-      pp.second->query_execution(getThreadId(), query, expected_result, r);
+      pp.second->query_execution(getThreadId(), schema, query, expected_result, r);
   }
 }
 
 void GeneralLogEntry::add_query_line(const std::string &s)
 {
-    boost::regex re("\\s+(\\d+)\\s+Query\\s+(.+)");
-    boost::smatch fields;    //std::cout << "LINE [" << s << "]" << std::endl;
+    boost::regex re("\\s+(\\d+)\\s+(Query|Init DB)\\s+(.+)");
+    boost::smatch fields;
+
+    //std::cout << "LINE [" << s << "]" << std::endl;
 
     if (boost::regex_search(s, fields, re))
     {
         //0 whole string
         //1 Thread id
-        //2 query        std::string ns = fields[2].str();        std::string::const_iterator begin = ns.begin();        std::string::const_iterator end = ns.end() - 1;
+        //2 operation
+        //3 quer
+        std::string ns = fields[3].str();
+        std::string::const_iterator begin = ns.begin();
+        std::string::const_iterator end = ns.end() - 1;
         if (ns.length() >= 2 && *(ns.end() - 2) == '\r')
-            --end;        //std::cout << "MATCHING THREADID [" << fields[1] << "] QUERY [" << fields[2] << "]" << std::endl;
+            --end;
+
+        //std::cout << "MATCHING THREADID [" << fields[1] << "] QUERY [" << fields[2] << "]" << std::endl;
         thread_id = strtoull(fields[1].str().c_str(), NULL, 10);
-        query.append(begin, end);
-        query.append(" ");
+        if (fields[2].str() == "Query")
+        {
+          query.append(begin, end);
+          query.append(" ");
+        }
+        else
+        {
+          schema= std::string(begin, end + 1);
+        }
     }
 }
 
