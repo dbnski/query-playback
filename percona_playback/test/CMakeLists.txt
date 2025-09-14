@@ -36,6 +36,7 @@ list(APPEND tests "thread-pool-sysbench-slow")
 
 FOREACH(test ${tests})
   add_executable(test-${test} "${test}.cc")
+  target_link_directories(test-${test} PRIVATE "/opt/boost_1_53_0/lib")
   target_link_libraries(test-${test} libpercona-playback ssl crypto)
   add_definitions(-DSRCDIR="${PROJECT_SOURCE_DIR}")
  

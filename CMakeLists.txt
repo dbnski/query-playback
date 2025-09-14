@@ -47,6 +47,7 @@ add_subdirectory(percona_playback)
 # main percona-playback executable
 include_directories(${PROJECT_SOURCE_DIR})
 add_executable(percona-playback bin/percona_playback.cc)
+target_link_directories(percona-playback PRIVATE "/opt/boost_1_53_0/lib")
 target_link_libraries(percona-playback libpercona-playback ssl crypto)
 install(TARGETS percona-playback RUNTIME DESTINATION bin LIBRARY DESTINATION lib)
 

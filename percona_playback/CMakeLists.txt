@@ -26,10 +26,10 @@ add_subdirectory(test)
 include_directories(${PROJECT_SOURCE_DIR})
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
+set(Boost_LIBRARIES boost_system;boost_thread;boost_regex;boost_program_options;boost_chrono)
 # setup db_thread lib which all plugins depend on
-find_package(Boost 1.53.0 COMPONENTS system thread regex program_options chrono REQUIRED)
-include_directories(${Boost_INCLUDE_DIR})
-link_directories(${Boost_LIBRARY_DIR})
+#find_package(Boost 1.53.0 COMPONENTS system thread regex program_options chrono REQUIRED)
+include_directories("/opt/boost_1_53_0/include")
 add_library(db_thread STATIC db_thread.cc)
 target_link_libraries(db_thread ${Boost_LIBRARIES})
 
