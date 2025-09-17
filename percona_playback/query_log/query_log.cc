@@ -60,8 +60,8 @@ static bool g_run_set_timestamp;
 static bool g_preserve_query_time;
 static bool g_accurate_mode;
 static bool g_disable_sorting;
-static bool g_read_only_mode;
 static bool g_skip_trivial_reads;
+static std::vector<std::string> g_match_statements;
 
 static boost::atomic<long long> g_max_behind_ns;
 
@@ -132,41 +132,26 @@ bool starts_with_ci(const std::string& str, const std::string& prefix) {
     );
 }
 
-enum Classification { IGNORE, EXCLUDE, INCLUDE };
+enum Classification { IGNORE, DISABLE, EXCLUDE, INCLUDE };
 
 struct StatementClass {
   boost::string_ref text;
   Classification type;
 };
 
-std::vector<StatementClass> default_classes = {
-  {"SELECT",     INCLUDE},  {"INSERT",    INCLUDE}, {"UPDATE",     INCLUDE},
-  {"DELETE",     INCLUDE},  {"SET",        IGNORE}, {"USE",        IGNORE},
+std::vector<StatementClass> statement_classes = {
+  {"SELECT",     INCLUDE}, {"INSERT",     INCLUDE}, {"UPDATE",     INCLUDE},
+  {"DELETE",     INCLUDE}, {"SET",        IGNORE},  {"USE",        IGNORE},
   {"BEGIN",      EXCLUDE}, {"START",      EXCLUDE}, {"COMMIT",     EXCLUDE},
   {"ROLLBACK",   EXCLUDE}, {"SAVEPOINT",  EXCLUDE}, {"RELEASE",    EXCLUDE},
   {"CREATE",     EXCLUDE}, {"DROP",       EXCLUDE}, {"ALTER",      EXCLUDE},
-  {"SHOW",       EXCLUDE}, {"PREPARE",    EXCLUDE}, {"EXECUTE",    EXCLUDE},
-  {"DEALLOCATE", EXCLUDE}, {"EXPLAIN",    EXCLUDE}, {"GRANT",      EXCLUDE},
-  {"REVOKE",     EXCLUDE}, {"FLUSH",      EXCLUDE}, {"LOCK",       EXCLUDE},
+  {"SHOW",       EXCLUDE}, {"PREPARE",    DISABLE}, {"EXECUTE",    DISABLE},
+  {"DEALLOCATE", DISABLE}, {"EXPLAIN",    DISABLE}, {"GRANT",      EXCLUDE},
+  {"REVOKE",     EXCLUDE}, {"FLUSH",      DISABLE}, {"LOCK",       EXCLUDE},
   {"UNLOCK",     EXCLUDE}, {"TRUNCATE",   EXCLUDE}, {"REPLACE",    EXCLUDE},
-  {"LOAD",       EXCLUDE}, {"ANALYZE",    EXCLUDE}, {"OPTIMIZE",   EXCLUDE},
-  {"CHECK",      EXCLUDE}, {"REPAIR",     EXCLUDE}, {"RENAME",     EXCLUDE},
-  {"CALL",       EXCLUDE}, {"INSTALL",    EXCLUDE}, {"UNINSTALL",  EXCLUDE}
-};
-
-std::vector<StatementClass> read_only_classes = {
-  {"SELECT",     INCLUDE},  {"INSERT",    EXCLUDE}, {"UPDATE",     EXCLUDE},
-  {"DELETE",     EXCLUDE},  {"SET",        IGNORE}, {"USE",        IGNORE},
-  {"BEGIN",      EXCLUDE}, {"START",      EXCLUDE}, {"COMMIT",     EXCLUDE},
-  {"ROLLBACK",   EXCLUDE}, {"SAVEPOINT",  EXCLUDE}, {"RELEASE",    EXCLUDE},
-  {"CREATE",     EXCLUDE}, {"DROP",       EXCLUDE}, {"ALTER",      EXCLUDE},
-  {"SHOW",       EXCLUDE}, {"PREPARE",    EXCLUDE}, {"EXECUTE",    EXCLUDE},
-  {"DEALLOCATE", EXCLUDE}, {"EXPLAIN",    EXCLUDE}, {"GRANT",      EXCLUDE},
-  {"REVOKE",     EXCLUDE}, {"FLUSH",      EXCLUDE}, {"LOCK",       EXCLUDE},
-  {"UNLOCK",     EXCLUDE}, {"TRUNCATE",   EXCLUDE}, {"REPLACE",    EXCLUDE},
-  {"LOAD",       EXCLUDE}, {"ANALYZE",    EXCLUDE}, {"OPTIMIZE",   EXCLUDE},
-  {"CHECK",      EXCLUDE}, {"REPAIR",     EXCLUDE}, {"RENAME",     EXCLUDE},
-  {"CALL",       EXCLUDE}, {"INSTALL",    EXCLUDE}, {"UNINSTALL",  EXCLUDE}
+  {"LOAD",       DISABLE}, {"ANALYZE",    DISABLE}, {"OPTIMIZE",   DISABLE},
+  {"CHECK",      DISABLE}, {"REPAIR",     DISABLE}, {"RENAME",     EXCLUDE},
+  {"CALL",       EXCLUDE}, {"INSTALL",    DISABLE}, {"UNINSTALL",  DISABLE}
 };
 
 boost::string_ref ltrim(boost::string_ref s) {
@@ -178,16 +163,16 @@ boost::string_ref ltrim(boost::string_ref s) {
   return boost::string_ref(begin, end - begin);
 }
 
-const StatementClass* match_statement(boost::string_ref line, const std::vector<StatementClass>& statements) {
+const StatementClass* match_statement(boost::string_ref line) {
   boost::string_ref trimmed = ltrim(line);
-  for (const auto& stmt : statements) {
-      if (trimmed.size() >= stmt.text.size() &&
-          trimmed.substr(0, stmt.text.size()) == stmt.text) {
+  for (const auto& cls : statement_classes) {
+      if (trimmed.size() >= cls.text.size() &&
+          trimmed.substr(0, cls.text.size()) == cls.text) {
 
         // Check next character after text
-        size_t next = stmt.text.size();
+        size_t next = cls.text.size();
         if (next == trimmed.size() || std::isspace(static_cast<unsigned char>(trimmed[next]))) {
-            return &stmt;
+            return &cls;
         }
       }
   }
@@ -196,12 +181,6 @@ const StatementClass* match_statement(boost::string_ref line, const std::vector<
 
 boost::shared_ptr<QueryLogEntries> getEntries(boost::string_ref data)  {
   boost::shared_ptr<QueryLogEntries> entries = boost::make_shared<QueryLogEntries>();
-
-  std::vector<StatementClass>& statement_classes = default_classes;
-  if (g_read_only_mode)
-  {
-    statement_classes = read_only_classes;
-  }
 
   QueryLogData::TimePoint current_timestamp;
   boost::string_ref::size_type pos = 0;
@@ -252,7 +231,7 @@ boost::shared_ptr<QueryLogEntries> getEntries(boost::string_ref data)  {
         {
           if (stmt == nullptr || stmt->type == IGNORE)
           {
-            stmt = match_statement(next_line, statement_classes);
+            stmt = match_statement(next_line);
           }
         }
         query_data_len += next_line.size();
@@ -563,11 +542,9 @@ public:
        _("Disables the sorting of queries based on time (and InnoDB TRX ID). "
          "Instead replays queries in the order they appear in the log. "
          "Ignored in accurate mode which always does the sorting."))
-      ("query-log-read-only-mode",
-       po::value<bool>(&g_read_only_mode)->
-        default_value(false)->
-          zero_tokens(),
-       _("Skip queries other than SELECT."))
+      ("query-log-match-statements",
+       po::value<std::vector<std::string>>(&g_match_statements)->multitoken(),
+       _("Restrict playback to enumerated statement classes (e.g. SELECT INSERT UPDATE DELETE)"))
       ("query-log-skip-trivial-reads",
        po::value<bool>(&g_skip_trivial_reads)->
         default_value(false)->
@@ -614,6 +591,37 @@ public:
       fprintf(stderr, _("ERROR: --query-log-file is a required option.\n"));
       return -1;
     }
+
+    if (!g_match_statements.empty()) {
+      for (auto& stmt : g_match_statements) {
+          std::transform(stmt.begin(), stmt.end(), stmt.begin(),
+                         [](unsigned char c) { return std::toupper(c); });
+      }
+
+      boost::unordered_set<std::string> statements(g_match_statements.begin(), g_match_statements.end());
+      for (auto& cls : statement_classes) {
+        std::string current = std::string(cls.text);
+        if (statements.find(current) == statements.end()) {
+          if (cls.type == INCLUDE)
+            cls.type = EXCLUDE;
+        }
+        statements.erase(current);
+      }
+      if (!statements.empty()) {
+        for (const auto& stmt : statements) {
+          std::cerr << _("ERROR: Invalid statement class: " << stmt) << std::endl;
+        }
+        return -1;
+      }
+    }
+    std::cerr << _(" Permitted statement classes: ");
+    for (auto& cls : statement_classes) {
+      if (cls.type != INCLUDE) {
+        continue;
+      }
+      std::cerr << cls.text << " ";
+    }
+    std::cerr << std::endl;
 
     return 0;
   }
