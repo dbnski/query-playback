@@ -19,6 +19,8 @@
 #include <stdlib.h>
 #include <string>
 #include <cstdio>
+#include <cctype>
+#include <vector>
 #include <iostream>
 #include <fstream>
 #include <stdint.h>
@@ -130,8 +132,76 @@ bool starts_with_ci(const std::string& str, const std::string& prefix) {
     );
 }
 
+enum Classification { IGNORE, EXCLUDE, INCLUDE };
+
+struct StatementClass {
+  boost::string_ref text;
+  Classification type;
+};
+
+std::vector<StatementClass> default_classes = {
+  {"SELECT",     INCLUDE},  {"INSERT",    INCLUDE}, {"UPDATE",     INCLUDE},
+  {"DELETE",     INCLUDE},  {"SET",        IGNORE}, {"USE",        IGNORE},
+  {"BEGIN",      EXCLUDE}, {"START",      EXCLUDE}, {"COMMIT",     EXCLUDE},
+  {"ROLLBACK",   EXCLUDE}, {"SAVEPOINT",  EXCLUDE}, {"RELEASE",    EXCLUDE},
+  {"CREATE",     EXCLUDE}, {"DROP",       EXCLUDE}, {"ALTER",      EXCLUDE},
+  {"SHOW",       EXCLUDE}, {"PREPARE",    EXCLUDE}, {"EXECUTE",    EXCLUDE},
+  {"DEALLOCATE", EXCLUDE}, {"EXPLAIN",    EXCLUDE}, {"GRANT",      EXCLUDE},
+  {"REVOKE",     EXCLUDE}, {"FLUSH",      EXCLUDE}, {"LOCK",       EXCLUDE},
+  {"UNLOCK",     EXCLUDE}, {"TRUNCATE",   EXCLUDE}, {"REPLACE",    EXCLUDE},
+  {"LOAD",       EXCLUDE}, {"ANALYZE",    EXCLUDE}, {"OPTIMIZE",   EXCLUDE},
+  {"CHECK",      EXCLUDE}, {"REPAIR",     EXCLUDE}, {"RENAME",     EXCLUDE},
+  {"CALL",       EXCLUDE}, {"INSTALL",    EXCLUDE}, {"UNINSTALL",  EXCLUDE}
+};
+
+std::vector<StatementClass> read_only_classes = {
+  {"SELECT",     INCLUDE},  {"INSERT",    EXCLUDE}, {"UPDATE",     EXCLUDE},
+  {"DELETE",     EXCLUDE},  {"SET",        IGNORE}, {"USE",        IGNORE},
+  {"BEGIN",      EXCLUDE}, {"START",      EXCLUDE}, {"COMMIT",     EXCLUDE},
+  {"ROLLBACK",   EXCLUDE}, {"SAVEPOINT",  EXCLUDE}, {"RELEASE",    EXCLUDE},
+  {"CREATE",     EXCLUDE}, {"DROP",       EXCLUDE}, {"ALTER",      EXCLUDE},
+  {"SHOW",       EXCLUDE}, {"PREPARE",    EXCLUDE}, {"EXECUTE",    EXCLUDE},
+  {"DEALLOCATE", EXCLUDE}, {"EXPLAIN",    EXCLUDE}, {"GRANT",      EXCLUDE},
+  {"REVOKE",     EXCLUDE}, {"FLUSH",      EXCLUDE}, {"LOCK",       EXCLUDE},
+  {"UNLOCK",     EXCLUDE}, {"TRUNCATE",   EXCLUDE}, {"REPLACE",    EXCLUDE},
+  {"LOAD",       EXCLUDE}, {"ANALYZE",    EXCLUDE}, {"OPTIMIZE",   EXCLUDE},
+  {"CHECK",      EXCLUDE}, {"REPAIR",     EXCLUDE}, {"RENAME",     EXCLUDE},
+  {"CALL",       EXCLUDE}, {"INSTALL",    EXCLUDE}, {"UNINSTALL",  EXCLUDE}
+};
+
+boost::string_ref ltrim(boost::string_ref s) {
+  const char* begin = s.data();
+  const char* end = begin + s.size();
+  while (begin < end && std::isspace(static_cast<unsigned char>(*begin))) {
+    ++begin;
+  }
+  return boost::string_ref(begin, end - begin);
+}
+
+const StatementClass* match_statement(boost::string_ref line, const std::vector<StatementClass>& statements) {
+  boost::string_ref trimmed = ltrim(line);
+  for (const auto& stmt : statements) {
+      if (trimmed.size() >= stmt.text.size() &&
+          trimmed.substr(0, stmt.text.size()) == stmt.text) {
+
+        // Check next character after text
+        size_t next = stmt.text.size();
+        if (next == trimmed.size() || std::isspace(static_cast<unsigned char>(trimmed[next]))) {
+            return &stmt;
+        }
+      }
+  }
+  return nullptr;
+}
+
 boost::shared_ptr<QueryLogEntries> getEntries(boost::string_ref data)  {
   boost::shared_ptr<QueryLogEntries> entries = boost::make_shared<QueryLogEntries>();
+
+  std::vector<StatementClass>& statement_classes = default_classes;
+  if (g_read_only_mode)
+  {
+    statement_classes = read_only_classes;
+  }
 
   QueryLogData::TimePoint current_timestamp;
   boost::string_ref::size_type pos = 0;
@@ -174,12 +244,17 @@ boost::shared_ptr<QueryLogEntries> getEntries(boost::string_ref data)  {
       }
 
       // read whole metadata (except '# Time') and query
-      int num_sql_lines = 0;
+      const StatementClass *stmt = nullptr;
       boost::string_ref::size_type query_data_len = 0;
       next_line = line;
       do {
         if (!next_line.starts_with('#'))
-          ++num_sql_lines;
+        {
+          if (stmt == nullptr || stmt->type == IGNORE)
+          {
+            stmt = match_statement(next_line, statement_classes);
+          }
+        }
         query_data_len += next_line.size();
         next_line = readline(data, pos);
 
@@ -187,7 +262,7 @@ boost::shared_ptr<QueryLogEntries> getEntries(boost::string_ref data)  {
       } while (!next_line.empty() && (!next_line.starts_with("# User@Host") && !next_line.starts_with("# Time")));
       entries->setNumEntries(entries->getNumEntries() + 1);
 
-      if (num_sql_lines) {
+      if (stmt != nullptr && stmt->type == INCLUDE) {
         if (g_accurate_mode && current_timestamp == QueryLogData::TimePoint()) {
           std::cerr << "WARNING: did not find a timestamp for the first query. Disabling accurate mode." << std::endl;
           g_accurate_mode = false;
@@ -202,6 +277,8 @@ boost::shared_ptr<QueryLogEntries> getEntries(boost::string_ref data)  {
   }
 
   std::cerr << _(" Finished reading log entries") << std::endl;
+  std::cerr << _(" Entries found: ") << (entries->getNumEntries()) << std::endl;
+  std::cerr << _(" Queries matched: ") << (entries->getNumQueries()) << std::endl;
   if (!g_disable_sorting || g_accurate_mode) {
     std::cerr << _(" Start sorting log entries") << std::endl;
 
@@ -236,10 +313,6 @@ void QueryLogData::execute(DBThread *t)
 {
   std::string query = getQuery(!g_run_set_timestamp);
 
-  if (g_read_only_mode && !starts_with_ci(query, "SELECT"))
-  {
-    return;
-  }
   if (g_skip_trivial_reads && starts_with_ci(query, "SELECT @@"))
   {
     return;
