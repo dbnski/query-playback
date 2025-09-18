@@ -665,6 +665,15 @@ public:
       return -1;
     }
 
+    if (!g_match_users.empty())
+    {
+      std::cerr << _("Permitted users: ");
+      for (const auto& user : g_match_users) {
+        std::cerr << user << " ";
+      }
+      std::cerr << std::endl;
+    }
+
     if (!g_match_statements.empty()) {
       for (auto& stmt : g_match_statements) {
           std::transform(stmt.begin(), stmt.end(), stmt.begin(),
@@ -699,7 +708,7 @@ public:
         return -1;
       }
     }
-    std::cerr << _(" Permitted statement classes: ");
+    std::cerr << _("Permitted statement classes: ");
     for (auto& cls : statement_classes) {
       if (cls.type != INCLUDE) {
         continue;
