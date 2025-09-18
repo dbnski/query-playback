@@ -62,6 +62,7 @@ static bool g_accurate_mode;
 static bool g_disable_sorting;
 static bool g_skip_trivial_reads;
 static std::vector<std::string> g_match_statements;
+static std::vector<std::string> g_match_users;
 
 static boost::atomic<long long> g_max_behind_ns;
 
@@ -118,6 +119,19 @@ static bool parse_time(boost::string_ref s, QueryLogData::TimePoint& start_time)
   start_time += boost::chrono::microseconds(msecs);
 
   return true;
+}
+
+boost::string_ref parse_user(boost::string_ref s) {
+  size_t location= find(s, "User@Host: ");
+  if (location == boost::string_ref::npos) {
+    return boost::string_ref();
+  }
+  size_t start = location + strlen("User@Host: ");
+  boost::string_ref remainder = s.substr(start);
+  size_t end = find(remainder, "[");
+  if (end == boost::string_ref::npos)
+    return boost::string_ref();
+  return s.substr(start, end);
 }
 
 bool starts_with_ci(const std::string& str, const std::string& prefix) {
@@ -244,6 +258,14 @@ boost::shared_ptr<QueryLogEntries> getEntries(boost::string_ref data)  {
         continue;
       }
 
+      boost::string_ref user;
+      if (!g_match_users.empty())
+      {
+        // Under the assumption that the User@Host line is either first or
+        // it immediately follows Time that we have just skipped.
+        user = parse_user(line);
+      }
+
       // read whole metadata (except '# Time') and query
       const StatementClass *stmt = nullptr;
       boost::string_ref::size_type query_data_len = 0;
@@ -262,6 +284,19 @@ boost::shared_ptr<QueryLogEntries> getEntries(boost::string_ref data)  {
         // stop if we find a line starting with "# User@Host" or "# Time" because it signals start of new query
       } while (!next_line.empty() && (!next_line.starts_with("# User@Host") && !next_line.starts_with("# Time")));
       entries->setNumEntries(entries->getNumEntries() + 1);
+
+      if (!g_match_users.empty())
+      {
+        bool found = false;
+        for (const auto m : g_match_users)
+        {
+          if (!user.compare(m))
+            found = true;
+        }
+        if (!found) {
+          stmt = nullptr;
+        }
+      }
 
       if (stmt != nullptr && stmt->type == INCLUDE) {
         if (g_accurate_mode && current_timestamp == QueryLogData::TimePoint()) {
@@ -488,6 +523,19 @@ boost::string_ref QueryLogData::parseSchema() const {
   return data.substr(start, end);
 }
 
+boost::string_ref QueryLogData::parseUser() const {
+  size_t location= find(data, "User@Host: ");
+  if (location == boost::string_ref::npos) {
+    return boost::string_ref("", 0);
+  }
+  size_t start = location + strlen("User@Host: ");
+  boost::string_ref remainder = data.substr(start);
+  size_t end = find(remainder, "[");
+  if (end == boost::string_ref::npos)
+    return boost::string_ref();
+  return data.substr(start, end);
+}
+
 extern percona_playback::DBClientPlugin *g_dbclient_plugin;
 
 static void LogReaderThread(boost::string_ref data, struct percona_playback_run_result *r)
@@ -567,6 +615,9 @@ public:
       ("query-log-match-statements",
        po::value<std::vector<std::string>>(&g_match_statements)->multitoken(),
        _("Restrict playback to enumerated statement classes (e.g. SELECT INSERT UPDATE DELETE)"))
+      ("query-log-match-users",
+       po::value<std::vector<std::string>>(&g_match_users)->multitoken(),
+       _("Restrict playback to queries from these users"))
       ("query-log-skip-trivial-reads",
        po::value<bool>(&g_skip_trivial_reads)->
         default_value(false)->

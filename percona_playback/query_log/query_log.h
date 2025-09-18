@@ -68,6 +68,7 @@ public:
   uint64_t parseRowsExamined() const;
   double parseQueryTime() const;
   boost::string_ref parseSchema() const;
+  boost::string_ref parseUser() const;
 
   TimePoint getStartTime() const { return start_time; }
   void setStartTime(TimePoint tp) { start_time = tp; }
