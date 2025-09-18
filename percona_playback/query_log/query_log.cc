@@ -132,26 +132,50 @@ bool starts_with_ci(const std::string& str, const std::string& prefix) {
     );
 }
 
-enum Classification { IGNORE, DISABLE, EXCLUDE, INCLUDE };
+bool starts_with_ci(const boost::string_ref str, const std::string& prefix) {
+    if (str.size() < prefix.size()) return false;
+
+    return std::equal(
+        prefix.begin(), prefix.end(),
+        str.begin(),
+        [](char a, char b) {
+            return std::tolower(a) == std::tolower(b);
+        }
+    );
+}
+
+enum Classification {
+  EXCLUDE,
+  INCLUDE,
+  IGNORE,
+  DISABLE
+};
 
 struct StatementClass {
-  boost::string_ref text;
+  std::string text;
   Classification type;
 };
 
 std::vector<StatementClass> statement_classes = {
-  {"SELECT",     INCLUDE}, {"INSERT",     INCLUDE}, {"UPDATE",     INCLUDE},
-  {"DELETE",     INCLUDE}, {"SET",        IGNORE},  {"USE",        IGNORE},
-  {"BEGIN",      EXCLUDE}, {"START",      EXCLUDE}, {"COMMIT",     EXCLUDE},
-  {"ROLLBACK",   EXCLUDE}, {"SAVEPOINT",  EXCLUDE}, {"RELEASE",    EXCLUDE},
-  {"CREATE",     EXCLUDE}, {"DROP",       EXCLUDE}, {"ALTER",      EXCLUDE},
-  {"SHOW",       EXCLUDE}, {"PREPARE",    DISABLE}, {"EXECUTE",    DISABLE},
-  {"DEALLOCATE", DISABLE}, {"EXPLAIN",    DISABLE}, {"GRANT",      EXCLUDE},
-  {"REVOKE",     EXCLUDE}, {"FLUSH",      DISABLE}, {"LOCK",       EXCLUDE},
-  {"UNLOCK",     EXCLUDE}, {"TRUNCATE",   EXCLUDE}, {"REPLACE",    EXCLUDE},
-  {"LOAD",       DISABLE}, {"ANALYZE",    DISABLE}, {"OPTIMIZE",   DISABLE},
-  {"CHECK",      DISABLE}, {"REPAIR",     DISABLE}, {"RENAME",     EXCLUDE},
-  {"CALL",       EXCLUDE}, {"INSTALL",    DISABLE}, {"UNINSTALL",  DISABLE}
+  {"SELECT",            INCLUDE}, {"INSERT",            INCLUDE},
+  {"UPDATE",            INCLUDE}, {"DELETE",            INCLUDE},
+  {"REPLACE",           EXCLUDE}, {"SET",                IGNORE},
+  {"USE",                IGNORE}, {"SHOW",              EXCLUDE},
+  {"BEGIN",             INCLUDE}, {"START TRANSACTION", INCLUDE},
+  {"COMMIT",            INCLUDE}, {"ROLLBACK",          EXCLUDE},
+  {"SAVEPOINT",         EXCLUDE}, {"RELEASE",           EXCLUDE},
+  {"CREATE",            EXCLUDE}, {"DROP",              EXCLUDE},
+  {"ALTER",             EXCLUDE}, {"RENAME",            EXCLUDE},
+  {"CALL",              EXCLUDE}, {"PREPARE",           EXCLUDE},
+  {"EXECUTE",           EXCLUDE}, {"DEALLOCATE",        EXCLUDE},
+  {"EXPLAIN",           DISABLE}, {"LOAD",              DISABLE},
+  {"GRANT",             DISABLE}, {"REVOKE",            DISABLE},
+  {"START",             DISABLE}, {"STOP",              DISABLE},
+  {"FLUSH",             DISABLE}, {"LOCK",              EXCLUDE},
+  {"UNLOCK",            EXCLUDE}, {"TRUNCATE",          EXCLUDE},
+  {"ANALYZE",           DISABLE}, {"OPTIMIZE",          DISABLE},
+  {"CHECK",             DISABLE}, {"REPAIR",            DISABLE},
+  {"INSTALL",           DISABLE}, {"UNINSTALL",         DISABLE}
 };
 
 boost::string_ref ltrim(boost::string_ref s) {
@@ -166,13 +190,11 @@ boost::string_ref ltrim(boost::string_ref s) {
 const StatementClass* match_statement(boost::string_ref line) {
   boost::string_ref trimmed = ltrim(line);
   for (const auto& cls : statement_classes) {
-      if (trimmed.size() >= cls.text.size() &&
-          trimmed.substr(0, cls.text.size()) == cls.text) {
-
-        // Check next character after text
+      if (starts_with_ci(trimmed, cls.text)) {
+        // Check if next character is white-space or EOF
         size_t next = cls.text.size();
         if (next == trimmed.size() || std::isspace(static_cast<unsigned char>(trimmed[next]))) {
-            return &cls;
+          return &cls;
         }
       }
   }
@@ -604,6 +626,18 @@ public:
         if (statements.find(current) == statements.end()) {
           if (cls.type == INCLUDE)
             cls.type = EXCLUDE;
+          continue;
+        }
+        switch (cls.type)
+        {
+          case IGNORE:
+            /* fallthrough */
+          case EXCLUDE:
+            cls.type = INCLUDE;
+            break;
+          case DISABLE:
+            std::cerr << _("ERROR: ") << current << _(" cannot be used") << std::endl;
+            return -1;
         }
         statements.erase(current);
       }
