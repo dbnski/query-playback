@@ -116,11 +116,30 @@ bool MySQLDBThread::select_db(const std::string &schema) {
     mr= mysql_select_db(&handle, schema.c_str());
     if(mr != 0)
     {
-      /* schema does not exist - fail fast */
-      if (mysql_errno(&handle) == 1049) {
-        fprintf(stderr,
-                "Error changing database: %s\n",
-                mysql_error(&handle));
+      bool fail_fast = false;
+      unsigned err = mysql_errno(&handle);
+      switch (err)
+      {
+        case 1158: // ER_NET_READ_ERROR
+        case 1159: // ER_NET_READ_INTERRUPTED
+        case 1160: // ER_NET_ERROR_ON_WRITE
+        case 1161: // ER_NET_WRITE_INTERRUPTED
+        case 1205: // ER_LOCK_WAIT_TIMEOUT
+        case 1213: // ER_LOCK_DEADLOCK
+        case 1637: // ER_TOO_MANY_CONCURRENT_TRXS
+        case 2006: // CR_SERVER_GONE_ERROR
+        case 2013: // CR_SERVER_LOST
+          break;
+        default:
+          fail_fast = true;
+          break;
+      }
+      if (fail_fast)
+      {
+        if (should_print_error(mysql_error(&handle))) {
+          fprintf(stderr,
+                  "Error changing database: %s\n", mysql_error(&handle));
+        }
         break;
       }
       if (should_print_error(mysql_error(&handle))) {
@@ -130,17 +149,25 @@ bool MySQLDBThread::select_db(const std::string &schema) {
                 i + 1,
                 options->max_retries + 1);
       }
-      if (mysql_errno(&handle) == 1203) {
-        usleep(1000000 * i);
+      switch (err)
+      {
+        case 1040: // ER_CON_COUNT_ERROR
+        case 1203: // ER_TOO_MANY_USER_CONNECTIONS
+          usleep(1000000 * i);
+          break;
+        default:
+          break;
       }
       disconnect();
       connect_and_init_session();
     }
-    else {
+    else
+    {
       current_schema = schema;
       return true;
     }
   }
+
   return false;
 }
 
@@ -161,6 +188,32 @@ void MySQLDBThread::execute_query(const std::string &query, QueryResult *r,
     r->setError(mr);
     if(mr != 0)
     {
+      bool fail_fast = false;
+      unsigned err = mysql_errno(&handle);
+      switch (err)
+      {
+        case 1158: // ER_NET_READ_ERROR
+        case 1159: // ER_NET_READ_INTERRUPTED
+        case 1160: // ER_NET_ERROR_ON_WRITE
+        case 1161: // ER_NET_WRITE_INTERRUPTED
+        case 1205: // ER_LOCK_WAIT_TIMEOUT
+        case 1213: // ER_LOCK_DEADLOCK
+        case 1637: // ER_TOO_MANY_CONCURRENT_TRXS
+        case 2006: // CR_SERVER_GONE_ERROR
+        case 2013: // CR_SERVER_LOST
+          break;
+        default:
+          fail_fast = true;
+          break;
+      }
+      if (fail_fast)
+      {
+        if (should_print_error(mysql_error(&handle))) {
+          fprintf(stderr,
+                  "Error during query: %s\n", mysql_error(&handle));
+        }
+        break;
+      }
       if (should_print_error(mysql_error(&handle))) {
         fprintf(stderr,
                 "Error during query: %s, number of tries %u of %u\n",
@@ -168,9 +221,14 @@ void MySQLDBThread::execute_query(const std::string &query, QueryResult *r,
                 i + 1,
                 options->max_retries + 1);
       }
-      /* If we have 'too many connections' error, sleep num_tries * 1s */
-      if (mysql_errno(&handle) == 1203) {
-        usleep(1000000 * i);
+      switch (err)
+      {
+        case 1040: // ER_CON_COUNT_ERROR
+        case 1203: // ER_TOO_MANY_USER_CONNECTIONS
+          usleep(1000000 * i);
+          break;
+        default:
+          break;
       }
       disconnect();
       connect_and_init_session();
@@ -190,7 +248,6 @@ void MySQLDBThread::execute_query(const std::string &query, QueryResult *r,
           r->setRowsSent(mysql_num_rows(mysql_res));
           mysql_free_result(mysql_res);
         }
-
       } while(!mysql_next_result(&handle));
 
       break;
