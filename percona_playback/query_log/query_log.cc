@@ -23,7 +23,6 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
-#include <filesystem>
 #include <chrono>
 #include <thread>
 #include <stdint.h>
@@ -174,8 +173,9 @@ void create_pause_file_and_wait(const std::string& path) {
     pause_file.close();
 
     std::cerr << " Pausing until " << path << " is removed... " << std::endl;
-    while (std::filesystem::exists(path)) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    while (!access(path.c_str(), F_OK))
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     std::cerr << " The file has been removed" << std::endl;
 }
@@ -698,7 +698,7 @@ public:
 
     if (!g_pause_file.empty())
     {
-      if (std::filesystem::exists(g_pause_file))
+      if (!access(g_pause_file.c_str(), F_OK))
       {
         fprintf(stderr, _("ERROR: --query-log-pause-after-load must not be pointing to an existing file.\n"));
         return -1;
