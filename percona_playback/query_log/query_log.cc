@@ -175,7 +175,7 @@ void create_pause_file_and_wait(const std::string& path) {
     std::cerr << " Pausing until " << path << " is removed... " << std::endl;
     while (!access(path.c_str(), F_OK))
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     std::cerr << " The file has been removed" << std::endl;
 }
