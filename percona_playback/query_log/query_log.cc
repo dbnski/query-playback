@@ -23,6 +23,9 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <filesystem>
+#include <chrono>
+#include <thread>
 #include <stdint.h>
 #include <assert.h>
 #include <boost/thread.hpp>
@@ -63,6 +66,7 @@ static bool g_disable_sorting;
 static bool g_skip_trivial_reads;
 static std::vector<std::string> g_match_statements;
 static std::vector<std::string> g_match_users;
+static std::string g_pause_file;
 
 static boost::atomic<long long> g_max_behind_ns;
 
@@ -156,6 +160,24 @@ bool starts_with_ci(const boost::string_ref str, const std::string& prefix) {
             return std::tolower(a) == std::tolower(b);
         }
     );
+}
+
+void create_pause_file_and_wait(const std::string& path) {
+    if (path.empty())
+      return;
+
+    std::ofstream pause_file(path);
+    if (!pause_file.is_open()) {
+      std::cerr << "ERROR: could not create file: " << path << std::endl;
+      return;
+    }
+    pause_file.close();
+
+    std::cerr << " Pausing until " << path << " is removed... " << std::endl;
+    while (std::filesystem::exists(path)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    std::cerr << " The file has been removed" << std::endl;
 }
 
 enum Classification {
@@ -336,7 +358,7 @@ boost::shared_ptr<QueryLogEntries> getEntries(boost::string_ref data)  {
 
     std::cerr << _(" Finished sorting log entries") << std::endl;
   }
-  std::cerr << _(" Finished preprocessing - starting playback...") << std::endl;
+  std::cerr << _(" Finished preprocessing") << std::endl;
 
   return entries;
 }
@@ -541,6 +563,11 @@ extern percona_playback::DBClientPlugin *g_dbclient_plugin;
 static void LogReaderThread(boost::string_ref data, struct percona_playback_run_result *r)
 {
   boost::shared_ptr<QueryLogEntries> entry_vec = getEntries(data);
+
+  if (!g_pause_file.empty())
+    create_pause_file_and_wait(g_pause_file);
+
+  std::cerr << " Starting playback..." << std::endl;
   g_dispatcher_plugin->dispatch(entry_vec);
 
   g_dispatcher_plugin->finish_all_and_wait();
@@ -623,6 +650,10 @@ public:
         default_value(false)->
           zero_tokens(),
        _("Skip SELECT @@var queries."))
+      ("query-log-pause-after-load",
+       po::value<std::string>(&g_pause_file),
+       _("Creates a pause file at specified location at the end of query log load "
+         "and pauses until the file is removed."))
       ;
 
     return &options;
@@ -663,6 +694,15 @@ public:
     {
       fprintf(stderr, _("ERROR: --query-log-file is a required option.\n"));
       return -1;
+    }
+
+    if (!g_pause_file.empty())
+    {
+      if (std::filesystem::exists(g_pause_file))
+      {
+        fprintf(stderr, _("ERROR: --query-log-pause-after-load must not be pointing to an existing file.\n"));
+        return -1;
+      }
     }
 
     if (!g_match_users.empty())
